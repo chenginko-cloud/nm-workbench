@@ -1,0 +1,1 @@
+{"name": "新媒体运营工作台", "short_name": "运营台", "description": "新媒体选题管理与内容生产进度追踪", "start_url": ".", "display": "standalone", "background_color": "#F6F5F2", "theme_color": "#5B5BF0", "icons": [{"src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any"}, {"src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable"}]}
