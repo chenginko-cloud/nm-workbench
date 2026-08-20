@@ -140,6 +140,19 @@
     resize:none;font-family:inherit;color:var(--ink);background:#fff;}
   .editor-foot{display:flex;justify-content:space-between;padding:10px 16px;font-size:12px;color:var(--sub);
     border-top:1px solid var(--line);background:#fff;padding-bottom:calc(env(safe-area-inset-bottom) + 10px);}
+/* 口令锁 */
+#lock{position:fixed;inset:0;z-index:9999;background:linear-gradient(160deg,#26407a,#141b2b);
+  display:flex;flex-direction:column;align-items:center;justify-content:center;padding:30px;color:#fff;}
+#lock.hidden{display:none;}
+#lock h2{font-size:22px;margin:0 0 8px;font-weight:800;}
+#lock p{font-size:13px;color:#aeb8cc;margin:0 0 24px;text-align:center;line-height:1.7;max-width:300px;}
+#lock input{width:100%;max-width:300px;border:none;border-radius:12px;padding:15px;font-size:17px;
+  text-align:center;margin-bottom:12px;outline:none;background:#fff;color:#1c2430;}
+#lock .lbtn{width:100%;max-width:300px;border:none;border-radius:12px;padding:15px;font-size:17px;
+  font-weight:800;background:#3b6ef5;color:#fff;cursor:pointer;}
+#lock .lbtn:active{background:#2f5bd0;}
+#lock .err{color:#ff9b9b;font-size:13px;margin-top:10px;min-height:18px;text-align:center;}
+#lock .hint{font-size:12px;color:#7e8aa3;margin-top:18px;text-align:center;max-width:300px;line-height:1.6;}
 </style>
 </head>
 <body>
@@ -675,10 +688,72 @@ document.getElementById("sync-disconnect").onclick=()=>{
   }
 };
 
-setSyncStatus(cfg.token ? "idle" : "idle");
-if(cfg.token){ setSyncStatus("sync"); pullCloud(); }
+// ---- 口令锁（界面级访问控制，与私有 Gist 双重保险）----
+const LOCK_KEY_L="nm_lock_hash_v1";
+const lockEl=document.getElementById("lock");
+const lockPass=document.getElementById("lock-pass");
+const lockPass2=document.getElementById("lock-pass2");
+const lockGo=document.getElementById("lock-go");
+const lockErr=document.getElementById("lock-err");
+const lockTip=document.getElementById("lock-tip");
+const lockHint=document.getElementById("lock-hint");
+function sha256hex(s){
+  if(window.crypto && crypto.subtle){
+    return crypto.subtle.digest("SHA-256", new TextEncoder().encode(s)).then(b=>{
+      let h=""; new Uint8Array(b).forEach(x=>h+=x.toString(16).padStart(2,"0")); return h;
+    });
+  }
+  // 降级（非安全上下文如 http 局域网）：简单哈希，仅挡一般人
+  let h=0; for(let i=0;i<s.length;i++){ h=(h*31 + s.charCodeAt(i))>>>0; }
+  return Promise.resolve(("0000000"+h.toString(16)).slice(-8));
+}
+function lockShowSet(){
+  lockTip.textContent="首次使用，请设置一个进入口令";
+  lockPass.placeholder="设置口令（至少4位）"; lockPass2.style.display="block";
+  lockGo.textContent="设置并进入";
+  lockHint.textContent="口令仅用于锁住本界面，存于本机浏览器，不上传。忘记需清空本机数据重置。";
+}
+function lockShowEnter(){
+  lockTip.textContent="请输入口令进入";
+  lockPass.placeholder="口令"; lockPass2.style.display="none";
+  lockGo.textContent="进入";
+  lockHint.textContent="你的数据存于私有 Gist，口令只锁界面。";
+}
+async function lockUnlock(){
+  lockErr.textContent="";
+  const h=localStorage.getItem(LOCK_KEY_L);
+  if(!h){
+    const p1=lockPass.value, p2=lockPass2.value;
+    if(p1.length<4){ lockErr.textContent="口令至少 4 位"; return; }
+    if(p1!==p2){ lockErr.textContent="两次输入不一致"; return; }
+    localStorage.setItem(LOCK_KEY_L, await sha256hex(p1));
+    lockEnterApp();
+  } else {
+    if(!lockPass.value){ lockErr.textContent="请输入口令"; return; }
+    if(await sha256hex(lockPass.value)===h){ lockEnterApp(); }
+    else { lockErr.textContent="口令错误"; lockPass.value=""; }
+  }
+}
+function lockEnterApp(){
+  lockEl.classList.add("hidden");
+  document.body.style.overflow="";
+  if(cfg.token){ setSyncStatus("sync"); pullCloud(); }
+  render();
+}
+lockGo.onclick=lockUnlock;
+[lockPass, lockPass2].forEach(i=>i.addEventListener("keydown",e=>{ if(e.key==="Enter") lockUnlock(); }));
+if(localStorage.getItem(LOCK_KEY_L)) lockShowEnter(); else lockShowSet();
+document.body.style.overflow="hidden";
 
-render();
 </script>
+<div id="lock">
+  <h2>🔒 新媒体工作台</h2>
+  <p id="lock-tip">请输入口令进入</p>
+  <input id="lock-pass" type="password" placeholder="口令" autocomplete="off">
+  <input id="lock-pass2" type="password" placeholder="再次输入确认" autocomplete="off" style="display:none;">
+  <button class="lbtn" id="lock-go">进入</button>
+  <div class="err" id="lock-err"></div>
+  <div class="hint" id="lock-hint"></div>
+</div>
 </body>
 </html>
