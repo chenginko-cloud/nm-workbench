@@ -112,6 +112,34 @@
   .export-bar button{flex:1;padding:10px;border-radius:11px;border:1px solid var(--line);background:var(--card);
     font-size:13px;color:var(--ink);}
   .export-bar button:active{background:#f0f0f6;}
+
+  /* 选题 / 草稿 模式切换 */
+  .modes{display:flex;gap:8px;padding:10px 14px 4px;}
+  .mode{flex:1;text-align:center;padding:10px;border-radius:14px;background:var(--card);
+    border:1px solid var(--line);font-size:14px;font-weight:600;color:var(--sub);}
+  .mode.active{background:var(--brand);color:#fff;border-color:var(--brand);box-shadow:var(--shadow);}
+
+  /* 草稿列表卡片 */
+  .dcard{background:var(--card);border-radius:16px;padding:14px;margin-bottom:12px;box-shadow:var(--shadow);
+    border-left:4px solid var(--brand);}
+  .dcard-top{display:flex;justify-content:space-between;align-items:center;gap:8px;}
+  .dcard .name{font-size:16px;font-weight:600;flex:1;word-break:break-word;}
+  .dcard .dlen{font-size:12px;color:var(--sub);flex:0 0 auto;}
+  .dcard .dsnip{font-size:13px;color:var(--ink);line-height:1.6;margin-top:8px;white-space:pre-wrap;
+    word-break:break-word;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
+
+  /* 草稿全屏编辑器 */
+  .editor-bg{position:fixed;inset:0;background:#fff;z-index:70;display:none;flex-direction:column;}
+  .editor-bg.show{display:flex;}
+  .editor-head{display:flex;align-items:center;gap:10px;
+    padding:calc(env(safe-area-inset-top) + 14px) 14px 12px;border-bottom:1px solid var(--line);background:#fff;}
+  .editor-close{border:none;background:none;font-size:24px;color:var(--sub);padding:0 6px;line-height:1;}
+  .editor-title{flex:1;font-size:16px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .editor-save{font-size:12px;color:var(--green);font-weight:600;white-space:nowrap;}
+  .editor-area{flex:1;width:100%;border:none;outline:none;padding:16px;font-size:16px;line-height:1.75;
+    resize:none;font-family:inherit;color:var(--ink);background:#fff;}
+  .editor-foot{display:flex;justify-content:space-between;padding:10px 16px;font-size:12px;color:var(--sub);
+    border-top:1px solid var(--line);background:#fff;padding-bottom:calc(env(safe-area-inset-bottom) + 10px);}
 </style>
 </head>
 <body>
@@ -133,6 +161,11 @@
   <input type="file" id="file-input" accept="application/json" style="display:none">
 </div>
 <div class="syncbar" id="syncbar"></div>
+
+<div class="modes" id="modes">
+  <div class="mode active" data-mode="topics">📋 选题</div>
+  <div class="mode" data-mode="drafts">✍️ 草稿</div>
+</div>
 
 <div class="tabs" id="tabs">
   <div class="tab active" data-f="all">全部</div>
@@ -202,7 +235,8 @@
       <input id="sync-token" placeholder="ghp_..." type="password" autocomplete="off">
     </div>
     <p style="font-size:12px;color:var(--sub);margin:-2px 0 12px;line-height:1.6;">
-      在 github.com → Settings → Developer settings → Personal access tokens，生成一个<b>只勾选 gist</b> 的令牌。
+      在 github.com → Settings → Developer settings → <b>Personal access tokens → Tokens (classic)</b>，生成一个<b>只勾选 gist</b> 的令牌（令牌以 <code>ghp_</code> 开头）。
+      ⚠️ <b>细粒度令牌（github_pat_ 开头）不支持 Gist</b>，用了会建不出 Gist ID。
       它仅存于你本机浏览器，不会上传给我。两端用<b>同一令牌 + 同一 Gist</b> 即可互相同步。
     </p>
     <div class="field">
@@ -224,6 +258,16 @@
   </div>
 </div>
 
+<div class="editor-bg" id="editor-bg">
+  <div class="editor-head">
+    <button class="editor-close" id="editor-close">✕</button>
+    <div class="editor-title" id="editor-title">草稿</div>
+    <div class="editor-save" id="editor-save">自动保存</div>
+  </div>
+  <textarea class="editor-area" id="editor-area" placeholder="在这里写你的内容草稿…（自动保存）"></textarea>
+  <div class="editor-foot"><span id="editor-count">0 字</span><span>✍️ 草稿会自动存入本选题</span></div>
+</div>
+
 <div class="toast" id="toast"></div>
 
 <script>
@@ -231,6 +275,7 @@ const KEY = "nm_workbench_v1";
 let data = load();
 let filter = "all";
 let kw = "";
+let mode = "topics";
 
 function load(){
   try{ const r = localStorage.getItem(KEY); if(r) return JSON.parse(r); }catch(e){}
@@ -254,30 +299,24 @@ function statusOf(t){
 }
 
 function render(){
-  const list = document.getElementById("list");
-  // 统计
-  let tot=0,doing=0,due=0,over=0;
-  data.forEach(t=>{ const s=statusOf(t); tot++;
-    if(s.done){} else if(s.overdue) over++; else if(s.duesoon) due++;
-    if(!s.done) doing++; });
-  document.getElementById("s-total").textContent=tot;
-  document.getElementById("s-doing").textContent=doing;
-  document.getElementById("s-due").textContent=due;
-  document.getElementById("s-over").textContent=over;
+  updateStatsOnly();
+  if(mode==="drafts"){ renderDrafts(); } else { renderTopics(); }
+}
 
+function renderTopics(){
+  const list = document.getElementById("list");
   const fdata = data.filter(t=>{
     const s=statusOf(t);
     if(filter==="doing" && (s.done||s.overdue)) return false;
     if(filter==="done" && !s.done) return false;
     if(filter==="over" && !s.overdue) return false;
     if(kw){ const q=kw.toLowerCase();
-      if(!(t.name+t.platform+t.type+(t.note||"")+(t.owner||"")).toLowerCase().includes(q)) return false; }
+      if(!(t.name+t.platform+t.type+(t.note||"")+(t.draft||"")+(t.owner||"")).toLowerCase().includes(q)) return false; }
     return true;
   });
 
   if(fdata.length===0){ list.innerHTML='<div class="empty"><b>🗂</b>还没有匹配的选题<br>点下方「＋ 新建选题」开始记录</div>'; return; }
 
-  // 排序：逾期/临期优先，再按截止日
   fdata.sort((a,b)=>{
     const sa=statusOf(a), sb=statusOf(b);
     const rank=x=> x.overdue?0 : x.duesoon?1 : x.done?3 : 2;
@@ -291,6 +330,7 @@ function render(){
     const cls = s.done?"done": s.overdue?"overdue": s.duesoon?"duesoon":"";
     let badges = `<span class="tag plt">${t.platform||"未设平台"}</span><span class="tag">${t.type||""}</span>`;
     if(t.owner) badges+=`<span class="tag">${t.owner}</span>`;
+    if(t.draft && t.draft.trim()) badges+=`<span class="tag">✍️ 草稿 ${t.draft.trim().length}字</span>`;
     if(s.done) badges+=`<span class="tag done">已完成</span>`;
     else if(s.overdue) badges+=`<span class="tag due">逾期 ${Math.abs(daysBetween(todayStr(),t.deadline))} 天</span>`;
     else if(s.duesoon) badges+=`<span class="tag soon">剩 ${daysBetween(todayStr(),t.deadline)} 天</span>`;
@@ -312,6 +352,27 @@ function render(){
   }).join("");
 
   bindBars();
+}
+
+function renderDrafts(){
+  const list = document.getElementById("list");
+  const items = data.filter(t=>{
+    if(kw){ const q=kw.toLowerCase();
+      if(!(t.name+t.platform+t.type+(t.note||"")+(t.draft||"")+(t.owner||"")).toLowerCase().includes(q)) return false; }
+    return true;
+  });
+  if(items.length===0){ list.innerHTML='<div class="empty"><b>✍️</b>还没有选题<br>去「选题」里点「＋ 新建选题」开始</div>'; return; }
+  list.innerHTML = items.map(t=>{
+    const len=(t.draft||"").trim().length;
+    const snip = len ? escapeHtml(t.draft.trim().slice(0,60))
+                     : '<span style="color:var(--sub)">点击开始写草稿…</span>';
+    return `<div class="dcard" data-id="${t.id}">
+      <div class="dcard-top"><div class="name">${escapeHtml(t.name)}</div>
+        <span class="dlen">${len?len+" 字":"未写"}</span></div>
+      <div class="tags"><span class="tag plt">${t.platform||"未设平台"}</span><span class="tag">${t.type||""}</span></div>
+      <div class="dsnip">${snip}</div>
+    </div>`;
+  }).join("");
 }
 
 function escapeHtml(s){ return (s||"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
@@ -403,10 +464,49 @@ document.getElementById("list").addEventListener("click",e=>{
 
 // 点卡片进编辑（避免和删除冲突）
 document.getElementById("list").addEventListener("click",e=>{
+  if(mode==="drafts") return;
   if(e.target.dataset.del) return;
   const card=e.target.closest(".card"); if(!card) return;
   if(e.target.closest(".bar")) return;
   const t=data.find(x=>x.id===card.dataset.id); if(t) openSheet(t);
+});
+
+// ---- 草稿全屏编辑器 ----
+const editorBg=document.getElementById("editor-bg");
+let editDraftId=null;
+function openEditor(id){
+  const t=data.find(x=>x.id===id); if(!t) return;
+  editDraftId=id;
+  document.getElementById("editor-title").textContent=t.name||"草稿";
+  const ta=document.getElementById("editor-area");
+  ta.value=t.draft||"";
+  document.getElementById("editor-count").textContent=(t.draft||"").length+" 字";
+  editorBg.classList.add("show");
+  setTimeout(()=>{ ta.focus(); try{ta.setSelectionRange(ta.value.length,ta.value.length);}catch(e){} },250);
+}
+function closeEditor(){
+  if(editDraftId!==null){
+    const t=data.find(x=>x.id===editDraftId);
+    if(t){ t.draft=document.getElementById("editor-area").value; t.updated=Date.now(); save(); schedulePush(); }
+  }
+  editDraftId=null; editorBg.classList.remove("show"); render();
+}
+document.getElementById("editor-close").onclick=closeEditor;
+document.getElementById("editor-area").addEventListener("input",e=>{
+  const v=e.target.value;
+  document.getElementById("editor-count").textContent=v.length+" 字";
+  document.getElementById("editor-save").textContent="已保存";
+  if(editDraftId!==null){
+    const t=data.find(x=>x.id===editDraftId);
+    if(t){ t.draft=v; t.updated=Date.now(); save(); schedulePush(); }
+  }
+});
+// 草稿列表点击 → 打开编辑器
+document.getElementById("list").addEventListener("click",e=>{
+  if(mode!=="drafts") return;
+  if(e.target.dataset.del) return;
+  const card=e.target.closest(".dcard"); if(!card) return;
+  openEditor(card.dataset.id);
 });
 
 // 筛选
@@ -416,6 +516,16 @@ document.getElementById("tabs").addEventListener("click",e=>{
   tab.classList.add("active"); filter=tab.dataset.f; render();
 });
 document.getElementById("search").oninput=e=>{ kw=e.target.value; render(); };
+
+// 选题 / 草稿 模式切换
+document.getElementById("modes").addEventListener("click",e=>{
+  const m=e.target.closest(".mode"); if(!m) return;
+  document.querySelectorAll(".mode").forEach(x=>x.classList.remove("active"));
+  m.classList.add("active");
+  mode=m.dataset.mode;
+  document.getElementById("tabs").style.display = mode==="topics" ? "flex" : "none";
+  render();
+});
 
 // ---- 第四步：维护 / 备份（本地 JSON 导出、导入）----
 document.getElementById("btn-export").onclick=()=>{
@@ -440,6 +550,15 @@ document.getElementById("file-input").onchange=e=>{
 const SYNC_KEY="nm_sync_cfg_v1";
 let cfg = (()=>{ try{ return JSON.parse(localStorage.getItem(SYNC_KEY))||{}; }catch(e){ return {}; } })();
 function setCfg(c){ cfg=c; localStorage.setItem(SYNC_KEY, JSON.stringify(c)); }
+
+function syncErr(e){
+  if(cfg.token && cfg.token.startsWith("github_pat_"))
+    return "细粒度令牌不支持 Gist，请改用 classic(ghp_)令牌";
+  if(e.status===401) return "令牌无效（或无 gist 权限）";
+  if(e.status===403) return "令牌无权限（确认只勾 gist 范围）";
+  if(e.status===404) return "Gist 不存在";
+  return "同步失败（检查网络/代理）";
+}
 
 function setSyncStatus(state, text){
   const el=document.getElementById("syncbar");
@@ -490,7 +609,7 @@ async function pushCloud(){
       cfg.gistId=r.id; setCfg(cfg);
     }
     setSyncStatus("ok", "已同步 "+new Date().toLocaleTimeString("zh-CN",{hour:"2-digit",minute:"2-digit"}));
-  }catch(e){ setSyncStatus("err", e.status===401?"令牌无效":"同步失败"); }
+  }catch(e){ setSyncStatus("err", syncErr(e)); }
 }
 
 let pushTimer=null;
@@ -506,7 +625,7 @@ async function pullCloud(){
       mergeData(remote); save(); render();
     }
     setSyncStatus("ok", "已同步 "+new Date().toLocaleTimeString("zh-CN",{hour:"2-digit",minute:"2-digit"}));
-  }catch(e){ setSyncStatus("err", e.status===401?"令牌无效":"拉取失败"); }
+  }catch(e){ setSyncStatus("err", syncErr(e)); }
 }
 
 async function doSync(){
@@ -539,7 +658,7 @@ document.getElementById("sync-connect").onclick=async()=>{
   setSyncStatus("sync");
   if(cfg.gistId){
     try{ await api("/gists/"+cfg.gistId, "GET"); await doSync(); }
-    catch(e){ setSyncStatus("err", e.status===401?"令牌无效或无 gist 权限":"Gist 不存在"); }
+    catch(e){ setSyncStatus("err", syncErr(e)); }
   } else { await pushCloud(); }
 };
 
